@@ -1,0 +1,34 @@
+# Secrets & env
+.env
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local data & model artifacts (the moat — never commit)
+data/**
+!data/.gitkeep
+!data/README.md
+*.parquet
+*.arrow
+*.pt
+*.pth
+*.bin
+*.safetensors
+adapters/
+checkpoints/
+wandb/
+outputs/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
