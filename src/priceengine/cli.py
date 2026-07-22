@@ -24,6 +24,25 @@ def _bootstrap():
     return get_settings()
 
 
+@app.command("prepare-items-lite")
+def prepare_items_lite_cmd(
+    train_limit: int = typer.Option(
+        0, help="Optional cap on train rows (0 = full 20k lite split)"
+    ),
+    dataset: str = typer.Option("ed-donner/items_lite", help="HF dataset id"),
+):
+    """Download Ed's items_lite and write splits + golden set (no Apify)."""
+    settings = _bootstrap()
+    from priceengine.corpus.items_lite import prepare_items_lite
+
+    counts = prepare_items_lite(
+        settings,
+        dataset_name=dataset,
+        train_limit=train_limit or None,
+    )
+    typer.echo(counts)
+
+
 @app.command("pull-apify")
 def pull_apify(
     max_items: int = typer.Option(50_000, help="Max items across all queries"),
@@ -159,7 +178,7 @@ def prep_dataset(
 @app.command("eval-baselines")
 def eval_baselines(
     golden: Path = typer.Option(
-        Path("data/golden/used_goods.parquet"), help="Golden-set parquet"
+        Path("data/golden/items_lite.parquet"), help="Golden-set parquet"
     ),
     train: Path = typer.Option(
         Path("data/splits/train.parquet"), help="Train parquet for category medians"
@@ -185,9 +204,46 @@ def eval_baselines(
     ]
     results = {c.name: run_pricer(c, items) for c in contestants}
     path = write_leaderboard(
-        battleground="used_goods_baselines",
+        battleground="items_lite_baselines",
         results=results,
         path=settings.reports_dir / "leaderboard-baselines.md",
+    )
+    typer.echo(f"Wrote {path}")
+
+
+@app.command("eval-ed")
+def eval_ed(
+    golden: Path = typer.Option(
+        Path("data/golden/items_lite.parquet"), help="Golden-set parquet"
+    ),
+    limit: int = typer.Option(100, help="How many test items (Modal cost scales with this)"),
+    modal_app: str = typer.Option("pricer-service", help="Modal app name"),
+):
+    """Grade Ed's Modal specialist (R0) + baselines on items_lite golden set."""
+    settings = _bootstrap()
+    from priceengine.corpus.io import load_eval_items, load_listings
+    from priceengine.corpus.splits import to_eval_items
+    from priceengine.eval.ed_modal import ModalEdPricer
+    from priceengine.eval.harness import run_pricer, write_leaderboard
+    from priceengine.eval.pricers import CategoryMedianPricer, ConstantPricer
+
+    items = load_eval_items(golden)
+    if limit:
+        items = items[:limit]
+    train_items = to_eval_items(load_listings(settings.splits_dir / "train.parquet"))
+    global_median = sorted(i.price for i in train_items)[len(train_items) // 2]
+
+    ed = ModalEdPricer(modal_app=modal_app)
+    contestants = [
+        ed,
+        CategoryMedianPricer(train_items),
+        ConstantPricer(global_median, name="global-median"),
+    ]
+    results = {c.name: run_pricer(c, items) for c in contestants}
+    path = write_leaderboard(
+        battleground="items_lite",
+        results=results,
+        path=settings.reports_dir / "leaderboard-items_lite.md",
     )
     typer.echo(f"Wrote {path}")
 

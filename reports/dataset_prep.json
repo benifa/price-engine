@@ -1,0 +1,14 @@
+{
+  "style": "ed",
+  "cutoff": 110,
+  "counts": {
+    "train": 19999,
+    "val": 1000,
+    "test": 1000
+  },
+  "truncated": {
+    "train": 12137,
+    "val": 610,
+    "test": 607
+  }
+}

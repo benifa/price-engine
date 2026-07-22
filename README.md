@@ -27,26 +27,33 @@ Same QLoRA recipe as week 7 — pointed at transactional data, with condition/ti
 
 Raw data and adapters are **not** committed (see `data/README.md`).
 
-## Quickstart
+## Quickstart (Ed / items_lite path — current default)
+
+No Apify required. Uses [`ed-donner/items_lite`](https://huggingface.co/datasets/ed-donner/items_lite) and Ed’s Modal specialist as R0.
 
 ```bash
 uv sync --extra dev
-cp .env.example .env   # HF_TOKEN, APIFY_API_TOKEN, WANDB_API_KEY, OPENAI_API_KEY
+cp .env.example .env   # HF_TOKEN, WANDB_API_KEY; OPENAI optional
 
-# 1) Pull sold listings (or prepare-from-jsonl path/to/dump.jsonl)
-uv run priceengine pull-apify --max-items 50000
-uv run priceengine split-clean
+# 1) Materialize Ed's dataset into our splits + golden set
+uv run priceengine prepare-items-lite
 
-# 2) Token budget report + SFT dataset
+# 2) Token budget + SFT dataset in Ed's prompt format
 uv run priceengine token-budget
-uv run priceengine prep-dataset --style ours --cutoff 110
+uv run priceengine prep-dataset --style ed --cutoff 110
 
-# 3) Baselines on the golden set (CPU)
+# 3) CPU baselines on items_lite test
 uv run priceengine eval-baselines
 
-# 4) Train R1 on Modal (Ed's hyperparams, our data)
-modal run src/priceengine/training/modal_train.py --config training/configs/ed_replica.yaml
+# 4) R0: Ed's published model via Modal (needs pricer-service deployed)
+uv run priceengine eval-ed --limit 100
+
+# 5) Train our control run on items_lite (same knobs as Ed)
+modal run src/priceengine/training/modal_train.py \
+  --config training/configs/items_lite_ed_format.yaml
 ```
+
+Sold-listings (Apify) path remains available via `pull-apify` when you are ready.
 
 ## Ablation ladder (must stay in this order)
 
