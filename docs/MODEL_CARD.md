@@ -1,43 +1,41 @@
-# Model card — Price Engine specialist (draft)
+# Model card — Price Engine Amazon specialist (draft)
 
-> Fill metrics after R1/R2 complete. Do not claim victory until `reports/leaderboard-used_goods.md` shows a passing paired comparison.
+> Fill metrics after the list-price QLoRA eval completes. Do not claim victory until
+> `reports/leaderboard.md` shows a passing paired comparison.
 
 ## Model details
 
 - **Base:** `meta-llama/Llama-3.2-3B` (base, not Instruct)
-- **Adaptation:** QLoRA (see `training/configs/`)
-- **Training data:** eBay sold / completed listings (private corpus); prices $1–$999 rounded
+- **Adaptation:** QLoRA (`training/configs/list_price_qlora.yaml`)
+- **Training data:** Amazon list-price prompts (`ed-donner/items_prompts_full` on Modal; local mirrors `benifa/items_*`)
 - **Languages:** English product descriptions
-- **License:** Code MIT; base model subject to Meta Llama license; do not redistribute scraped raw data
+- **License:** Code MIT; base model subject to Meta Llama license
 
 ## Intended use
 
-Estimate a **resale / sold** market value from a free-text description plus optional condition and category. For research, Deal Hunter pricing, and seller guidance — not as sole authority for high-stakes financial decisions.
+Estimate an Amazon-style list price from a free-text description. Research and
+pricing tooling — not sole authority for high-stakes financial decisions.
 
 ## Out-of-scope
 
 - Items without text descriptions
-- Prices outside $1–$999 (excluded from training)
+- Prices outside $1–$999
 - Exact collectibles / one-of-ones with no comps
-- Legal appraisal / insurance valuation without human review
 
 ## Evaluation data
 
-- **Primary:** time-split held-out eBay solds (`data/golden/used_goods.parquet`, not in git)
-- **Secondary:** `ed-donner/items_lite` test
+- **Primary:** Amazon lite test (`benifa/items_lite` → `data/golden/amazon.parquet`)
 
 ## Metrics (to be filled)
 
-| Contestant | Battleground | MAE | Hit rate | vs Ed ΔMAE (95% CI) |
-|------------|--------------|-----|----------|---------------------|
-| R0 Ed | used_goods | — | — | — |
-| R1 | used_goods | — | — | — |
-| R2 | used_goods | — | — | — |
-
-## Ethical considerations
-
-Training data is scraped marketplace content. We do not publish raw listings. Estimates can be wrong; confidence and comps should be shown to users. Automation that messages sellers must respect platform ToS.
+| Model | Eval set | MAE | Hit rate | vs baseline ΔMAE (95% CI) |
+|-------|----------|-----|----------|---------------------------|
+| Published baseline | amazon | — | — | — |
+| list_price_qlora | amazon | — | — | — |
 
 ## Citation
 
-Ed Donner’s LLM engineering course week 7 established the QLoRA price-completion recipe and published `ed-donner/price-2025-11-28`. This project reuses that recipe with transactional targets and a stricter eval protocol.
+The QLoRA price-completion recipe and published checkpoint
+`ed-donner/price-2025-11-28` come from Ed Donner’s LLM engineering course week 7.
+This project mirrors the Amazon list-price datasets under `benifa/` and reuses that
+recipe with a stricter paired-bootstrap eval protocol.

@@ -4,35 +4,32 @@
 
 1. **Same base:** `meta-llama/Llama-3.2-3B`.
 2. **Same serve path:** 4-bit NF4, double quant, bf16 compute, `set_seed(42)`, `max_new_tokens=5`, regex after `Price is $`.
-3. **Native prompts:** Ed’s checkpoint is prompted with Ed’s week-7 format; ours with our conditioned format. Cross-prompting is not used for the headline table.
-4. **Same golden items** for every contestant on a battleground.
+3. **Native prompts:** list-price format (`amazon_list`) for Amazon checkpoints.
+4. **Same golden items** for every model (`data/golden/amazon.parquet`).
 5. **Paired bootstrap** on per-item absolute errors for ΔMAE (10k resamples).
 
-## Battlegrounds
+## Eval sets
 
 | Name | Data | Purpose |
 |------|------|---------|
-| `used_goods` | Time-split eBay solds (golden) | Headline claim |
-| `items_lite` | Ed’s Amazon test split | Integrity / distribution shift |
-| `used_goods_baselines` | Same golden, CPU baselines | Sanity floor |
+| `amazon` | Lite test (`benifa/items_lite` → golden) | Headline claim |
+| `baselines` | Same golden, CPU baselines | Sanity floor |
 
 ## Metrics
 
 - MAE ($), median APE, hit-rate (error &lt; $40 **or** &lt; 20% of truth), RMSLE.
-- Optional: calibration when confidence is emitted.
-- Slices: category × condition; truncated vs not.
 
 ## Victory
 
-`relative_improvement = (mae_ed - mae_ours) / mae_ed ≥ 0.25` **and** paired CI lower bound &gt; 0.
+`relative_improvement = (mae_baseline - mae_challenger) / mae_baseline ≥ 0.25` **and** paired CI lower bound &gt; 0.
 
-## Contestants
+## Models
 
 | ID | Adapter |
 |----|---------|
-| R0 | `FineTunedPricer(ed-donner/..., prompt_style="ed")` |
-| R1–R3 | Our adapters with `prompt_style="ours"` |
-| baselines | `CategoryMedianPricer`, `ConstantPricer`, `ZeroShotFrontierPricer` |
-| R4 | RAG / ensemble wrappers (post sold-comps store) |
+| Published baseline | Amazon adapter via Modal `pricer-service` |
+| list_price_qlora | Our list-price QLoRA adapter |
+| Same-category train median | Guess median train price in that category |
+| Overall train median | Guess one number: median of all train prices |
 
 Implementation: `src/priceengine/eval/`.

@@ -1,30 +1,26 @@
-"""Shared data models for corpus, training, and evaluation."""
+"""Shared data models for data prep, training, and evaluation.
 
-from datetime import date, datetime
-from typing import Literal
+* ``ProductListing`` — one training/split row (``list_price``, ``item_id``)
+* ``EvalItem`` — one golden-set row for scoring (``price``, ``id``)
+* ``Prediction`` / ``RunMetrics`` / ``ComparisonResult`` — eval outputs
+"""
 
 from pydantic import BaseModel, Field
 
-from priceengine.config import CONDITIONS, Condition
-
-ListingFormat = Literal["auction", "bin", "unknown"]
+from priceengine.config import Condition
 
 
-class SoldListing(BaseModel):
-    """One cleaned transactional record (eBay sold / completed)."""
+class ProductListing(BaseModel):
+    """One product with a known list price (training / split row)."""
 
     item_id: str
     title: str
     description: str
-    condition: Condition
     category: str
-    sold_price: float
-    sold_date: date
-    listing_format: ListingFormat = "unknown"
-    url: str = ""
+    list_price: float
+    condition: Condition = "new"
 
     def text_for_pricing(self) -> str:
-        """Description blob passed to the model (title + description)."""
         desc = self.description.strip()
         if desc and desc.lower() != self.title.lower():
             return f"{self.title.strip()}\n{desc}"
@@ -32,17 +28,16 @@ class SoldListing(BaseModel):
 
 
 class EvalItem(BaseModel):
-    """A single evaluation example — identity-free description + ground truth."""
+    """One held-out example used when scoring a pricer."""
 
     id: str
     title: str
     description: str
-    condition: Condition | None = None
+    price: float = Field(description="Ground-truth list price in USD")
     category: str | None = None
-    sold_date: date | None = None
-    price: float = Field(description="Ground-truth price (sold or list, depending on battleground)")
+    condition: Condition | None = "new"
     truncated: bool = False
-    source: str = "sold"  # "sold" | "items_lite"
+    source: str = "list_price"
 
     def text_for_pricing(self) -> str:
         desc = self.description.strip()
@@ -52,7 +47,7 @@ class EvalItem(BaseModel):
 
 
 class Prediction(BaseModel):
-    """One model prediction for an EvalItem."""
+    """One pricer output for an EvalItem."""
 
     item_id: str
     guess: float
@@ -64,10 +59,10 @@ class Prediction(BaseModel):
 
 
 class RunMetrics(BaseModel):
-    """Aggregate metrics for one contestant on one battleground."""
+    """Aggregate metrics for one pricer on one eval set."""
 
     name: str
-    battleground: str
+    eval_set: str
     n: int
     mae: float
     median_ape: float
@@ -78,12 +73,12 @@ class RunMetrics(BaseModel):
 
 
 class ComparisonResult(BaseModel):
-    """Paired comparison of our model vs a baseline (typically Ed)."""
+    """Paired comparison of a challenger vs a baseline pricer."""
 
-    ours: str
+    challenger: str
     baseline: str
-    battleground: str
-    delta_mae: float  # baseline_mae - ours_mae (positive => we win)
+    eval_set: str
+    delta_mae: float  # baseline_mae - challenger_mae (positive => challenger wins)
     relative_improvement: float
     ci_low: float
     ci_high: float
@@ -91,15 +86,11 @@ class ComparisonResult(BaseModel):
     victory: bool
 
 
-# Keep CONDITIONS re-exported for callers that import from models
 __all__ = [
-    "SoldListing",
+    "ProductListing",
     "EvalItem",
     "Prediction",
     "RunMetrics",
     "ComparisonResult",
-    "CONDITIONS",
     "Condition",
-    "ListingFormat",
-    "datetime",
 ]

@@ -1,77 +1,162 @@
 # Price Engine
 
-Calibrated **secondhand valuation from a bare description** — a QLoRA specialist trained on real sold prices, evaluated with a fair protocol against [`ed-donner/price-2025-11-28`](https://huggingface.co/ed-donner/price-2025-11-28_18.47.07).
+Estimate an **Amazon list price** from a bare product description using a QLoRA
+specialist on `meta-llama/Llama-3.2-3B`, then score it fairly against the published
+checkpoint
+[`ed-donner/price-2025-11-28`](https://huggingface.co/ed-donner/price-2025-11-28_18.47.07).
 
-> **Headline claim (used-goods golden set):** our specialist beats Ed’s published adapter by ≥25% relative MAE, with a 95% paired-bootstrap CI on ΔMAE that excludes zero. Results land in [`reports/`](reports/) as they are produced.
+This is a research / portfolio pipeline — data prep, Modal training, and a
+paired-bootstrap eval protocol — not a production pricing API.
 
-## Why this exists
+## What it does
 
-Price-history tools need a clean product ID. Generic LLM guesses have no trained price structure. Ed’s course model (which we still ship in [deal-hunter-agent](https://github.com/benifa/deal-hunter-agent)) is strong on **Amazon list prices of new items**. This repo asks a different question:
+```mermaid
+flowchart LR
+  Hub["Hugging Face Hub<br/>benifa/items_*"]
+  Prep["data_prep<br/>local parquet"]
+  Train["training<br/>Modal QLoRA"]
+  Eval["eval<br/>leaderboard"]
+  Report["reports/<br/>leaderboard.md"]
 
-> *Given a messy description and condition, what did this actually sell for?*
+  Hub --> Prep
+  Prep -->|golden set| Eval
+  Hub -->|items_prompts_full| Train
+  Train -->|adapter| Eval
+  Eval --> Report
+```
 
-Same QLoRA recipe as week 7 — pointed at transactional data, with condition/time conditioning, ablation-tracked training, and a leaderboard that grades Ed as contestant zero.
+1. **Prepare** Amazon list-price rows from Hub → `data/splits/` + held-out golden set.
+2. **Train** a LoRA that completes `Price is $NNN.00` (usually on Modal from Hub prompts).
+3. **Evaluate** our adapter vs the published baseline on the **same** golden items,
+   with MAE / hit-rate and a paired bootstrap victory test.
 
-## Repo map
+Labels are catalog **list** prices in **$1–$999** (rounded), not marketplace sold comps.
+
+## Architecture
+
+```mermaid
+flowchart TB
+  subgraph root["priceengine/"]
+    CLI["cli.py"]
+    CFG["config.py"]
+    MOD["models.py"]
+  end
+
+  subgraph prep["data_prep/"]
+    DB["dataset_builder"]
+    PR["parquet_records"]
+  end
+
+  subgraph train["training/"]
+    P["prompts"]
+    TB["token_budget"]
+    SFT["sft_dataset"]
+    QJ["qlora_job"]
+  end
+
+  subgraph ev["eval/"]
+    PRC["pricers"]
+    PB["published_baseline"]
+    AS["adapter_scoring"]
+    M["metrics"]
+    LB["leaderboard"]
+  end
+
+  CLI --> prep
+  CLI --> train
+  CLI --> ev
+  prep --> MOD
+  train --> MOD
+  ev --> MOD
+  prep --> CFG
+  train --> CFG
+  ev --> CFG
+  P -.->|shared prompt text| PRC
+  P -.->|shared prompt text| AS
+```
 
 | Path | Role |
 |------|------|
-| `src/priceengine/corpus/` | Apify pull, cleaning, time splits, leakage controls |
-| `src/priceengine/training/` | Prompts, token budget, dataset prep, Modal QLoRA |
-| `src/priceengine/eval/` | Pricer protocol, metrics, bootstrap, leaderboard |
-| `src/priceengine/serving/` | Valuation API (Modal) |
-| `training/configs/` | `ed_replica.yaml` (R1), `all_linear_r32.yaml` (R2), `all_linear_r64.yaml` (R3) |
-| `docs/DESIGN.md` | Full architecture & decisions |
-| `docs/COMPARISON.md` | Fair-eval protocol vs Ed |
-| `docs/MODEL_CARD.md` | Intended use, limits, metrics |
+| `src/priceengine/cli.py` | Typer entrypoint (`prepare-list-prices`, `eval`, …) |
+| `src/priceengine/config.py` | Paths, price bounds, prompt constants, victory thresholds |
+| `src/priceengine/models.py` | Shared schemas (`ProductListing`, `EvalItem`, …) |
+| `src/priceengine/data_prep/` | Hub → local train/val/golden parquet |
+| `src/priceengine/training/` | Prompts, token budget, optional SFT build, Modal QLoRA |
+| `src/priceengine/eval/` | Pricers, metrics, leaderboard, Modal scoring |
+| `training/configs/list_price_qlora.yaml` | QLoRA hyperparameters (Colab full-mode recipe) |
+| `docs/` | Design, comparison protocol, training notes, model card |
 
-Raw data and adapters are **not** committed (see `data/README.md`).
+Raw data and adapters are **not** committed (see [`data/README.md`](data/README.md)).
 
-## Quickstart (Ed / items_lite path — current default)
+## Prompt format
 
-No Apify required. Uses [`ed-donner/items_lite`](https://huggingface.co/datasets/ed-donner/items_lite) and Ed’s Modal specialist as R0.
+Every training and eval example uses the same shape:
+
+```text
+What does this cost to the nearest dollar?
+
+<title + description>
+
+Price is $
+```
+
+The model emits `NNN.00`. Loss during SFT is **completion-only** after `Price is $`.
+
+## Quickstart
+
+**Needs:** `HF_TOKEN` (gated Llama + Hub), a Modal account, and a deployed
+`pricer-service` for the published baseline — or `--no-include-baseline` /
+reuse `reports/leaderboard.json`.
 
 ```bash
 uv sync --extra dev
-cp .env.example .env   # HF_TOKEN, WANDB_API_KEY; OPENAI optional
+cp .env.example .env   # HF_TOKEN=...
 
-# 1) Materialize Ed's dataset into our splits + golden set
-uv run priceengine prepare-items-lite
+# 1) Golden set + local splits (from benifa/items_lite)
+uv run priceengine prepare-list-prices --size lite
 
-# 2) Token budget + SFT dataset in Ed's prompt format
-uv run priceengine token-budget
-uv run priceengine prep-dataset --style ed --cutoff 110
+# 2) Train on Modal A100 (writes /data/checkpoints/list_price_qlora)
+uv run modal run --detach src/priceengine/training/qlora_job.py \
+  --config training/configs/list_price_qlora.yaml
 
-# 3) CPU baselines on items_lite test
-uv run priceengine eval-baselines
-
-# 4) R0: Ed's published model via Modal (needs pricer-service deployed)
-uv run priceengine eval-ed --limit 100
-
-# 5) Train our control run on items_lite (same knobs as Ed)
-modal run src/priceengine/training/modal_train.py \
-  --config training/configs/items_lite_ed_format.yaml
+# 3) Grade vs published baseline
+# Older volume folder still named amazon_replica — label it with --name:
+uv run priceengine eval --modal \
+  --adapter-path /data/checkpoints/amazon_replica \
+  --name list_price_qlora \
+  --limit 100 --out reports/leaderboard.md
 ```
 
-Sold-listings (Apify) path remains available via `pull-apify` when you are ready.
+Optional helpers:
 
-## Ablation ladder (must stay in this order)
+```bash
+uv run priceengine token-budget          # CUTOFF histograms → reports/token_length/
+uv run priceengine build-sft-dataset     # local splits → data/hf_dataset/
+uv run priceengine eval-baselines        # CPU medians only
+uv run priceengine visualize-eval        # Plotly HTML (truth vs guess) → browser
+```
 
-| Run | What changes | Question it answers |
-|-----|----------------|---------------------|
-| **R0** | Ed’s published checkpoint | Baseline on our golden set |
-| **R1** | Our data + prompt; Ed’s exact knobs | Is the win from **data**? |
-| **R2** | All-linear LoRA + MAE early stop | Is the win from **method**? |
-| **R3** | r=64 | Is the win from **capacity**? |
-| **R4** | Sold-comps RAG + re-fit ensemble | System-level accuracy |
+Dataset mirrors: `benifa/items_lite`, `benifa/items_full`. Exact training knobs:
+[`docs/TRAINING.md`](docs/TRAINING.md).
 
-Ed is always graded with **his** prompt format; we use **ours**. Same 4-bit serve path, same seed, same regex.
+## Victory criteria
+
+On the Amazon golden set vs the published Modal baseline:
+
+- Relative MAE improvement ≥ **25%**, **and**
+- 95% paired-bootstrap CI on ΔMAE has lower bound **> 0**, **and**
+- Beat the same-category train-median baseline
+
+Full protocol: [`docs/COMPARISON.md`](docs/COMPARISON.md).
 
 ## Docs
 
-- [Design](docs/DESIGN.md)
-- [Comparison protocol](docs/COMPARISON.md)
-- [Model card](docs/MODEL_CARD.md)
+| Doc | Contents |
+|-----|----------|
+| [Design](docs/DESIGN.md) | Architecture, data contracts, package boundaries |
+| [Comparison](docs/COMPARISON.md) | Fair-eval rules and metrics |
+| [Training](docs/TRAINING.md) | Colab-full replica hyperparameters |
+| [Model card](docs/MODEL_CARD.md) | Intended use and results placeholder |
 
 ## License
 

@@ -1,9 +1,0 @@
-{
-  "dataset": "ed-donner/items_lite",
-  "counts": {
-    "train": 19999,
-    "val": 1000,
-    "test": 1000
-  },
-  "note": "Using Ed's official HF splits (not time-based). condition=new; labels=Amazon list prices."
-}

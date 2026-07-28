@@ -1,4 +1,20 @@
-"""Metrics and paired bootstrap comparison."""
+"""Aggregate metrics and paired-bootstrap comparison (docs/COMPARISON.md).
+
+Headline numbers
+----------------
+* **MAE** — mean absolute dollar error
+* **Median APE** — median absolute percentage error
+* **Hit rate** — share of items with error < $40 **or** < 20% of truth
+* **RMSLE** — root mean squared log error (symmetric-ish scale)
+
+Victory vs published baseline
+-----------------------------
+On the same item ids, take per-item ``baseline_error - challenger_error``.
+Victory requires:
+
+1. Relative MAE improvement ≥ ``Settings.victory_relative_mae`` (default 25%), and
+2. The 95% paired-bootstrap CI on that mean delta has a lower bound > 0.
+"""
 
 from __future__ import annotations
 
@@ -10,52 +26,81 @@ from priceengine.config import Settings, get_settings
 from priceengine.models import ComparisonResult, Prediction, RunMetrics
 
 
-def _ape(guess: float, truth: float) -> float:
+def _absolute_percentage_error(guess: float, truth: float) -> float:
     if truth <= 0:
         return 0.0 if guess == 0 else 1.0
     return abs(guess - truth) / truth
 
 
 def is_hit(error: float, truth: float, settings: Settings | None = None) -> bool:
+    """True when absolute or relative error falls under the configured thresholds."""
     settings = settings or get_settings()
     return error < settings.hit_abs_dollars or (
         truth > 0 and error / truth < settings.hit_rel_fraction
     )
 
 
+def _bootstrap_mean_ci(
+    values: np.ndarray,
+    *,
+    n_samples: int,
+    alpha: float = 0.05,
+    seed: int = 42,
+) -> tuple[float, float]:
+    """Percentile CI for the mean of ``values`` via nonparametric bootstrap."""
+    rng = np.random.default_rng(seed)
+    n = len(values)
+    means = np.empty(n_samples)
+    for i in range(n_samples):
+        means[i] = values[rng.integers(0, n, n)].mean()
+    return (
+        float(np.quantile(means, alpha / 2)),
+        float(np.quantile(means, 1 - alpha / 2)),
+    )
+
+
 def summarize(
     name: str,
-    battleground: str,
+    eval_set: str,
     preds: Sequence[Prediction],
     *,
     settings: Settings | None = None,
     bootstrap: bool = True,
 ) -> RunMetrics:
+    """Roll per-item predictions into one ``RunMetrics`` row for the leaderboard."""
     settings = settings or get_settings()
     if not preds:
         return RunMetrics(
             name=name,
-            battleground=battleground,
+            eval_set=eval_set,
             n=0,
             mae=0.0,
             median_ape=0.0,
             hit_rate=0.0,
             rmsle=0.0,
         )
+
     errors = np.array([p.error for p in preds], dtype=float)
-    apes = np.array([_ape(p.guess, p.truth) for p in preds], dtype=float)
-    hits = np.array([is_hit(p.error, p.truth, settings) for p in preds], dtype=float)
+    apes = np.array(
+        [_absolute_percentage_error(p.guess, p.truth) for p in preds], dtype=float
+    )
+    hits = np.array(
+        [is_hit(p.error, p.truth, settings) for p in preds], dtype=float
+    )
     truths = np.array([p.truth for p in preds], dtype=float)
+    # Clamp guesses at 0 so log1p is defined (parser may return 0 on failure).
     guesses = np.array([max(0.0, p.guess) for p in preds], dtype=float)
     rmsle = float(np.sqrt(np.mean((np.log1p(guesses) - np.log1p(truths)) ** 2)))
 
     ci_low = ci_high = None
     if bootstrap and len(preds) >= 10:
-        ci_low, ci_high = bootstrap_mae_ci(errors, n_samples=settings.bootstrap_samples)
+        ci_low, ci_high = _bootstrap_mean_ci(
+            errors, n_samples=settings.bootstrap_samples
+        )
 
     return RunMetrics(
         name=name,
-        battleground=battleground,
+        eval_set=eval_set,
         n=len(preds),
         mae=float(errors.mean()),
         median_ape=float(np.median(apes)),
@@ -69,67 +114,67 @@ def summarize(
 def bootstrap_mae_ci(
     errors: np.ndarray, *, n_samples: int = 10_000, alpha: float = 0.05, seed: int = 42
 ) -> tuple[float, float]:
-    rng = np.random.default_rng(seed)
-    n = len(errors)
-    means = np.empty(n_samples)
-    for i in range(n_samples):
-        sample = errors[rng.integers(0, n, n)]
-        means[i] = sample.mean()
-    low = float(np.quantile(means, alpha / 2))
-    high = float(np.quantile(means, 1 - alpha / 2))
-    return low, high
+    """Public wrapper kept for tests / notebooks — CI on mean absolute error."""
+    return _bootstrap_mean_ci(errors, n_samples=n_samples, alpha=alpha, seed=seed)
 
 
 def paired_compare(
-    ours_name: str,
+    challenger_name: str,
     baseline_name: str,
-    ours: Sequence[Prediction],
+    challenger: Sequence[Prediction],
     baseline: Sequence[Prediction],
     *,
-    battleground: str,
+    eval_set: str,
     settings: Settings | None = None,
 ) -> ComparisonResult:
-    """Paired bootstrap on (baseline_error - ours_error). Positive delta => we win."""
+    """Paired bootstrap on (baseline_error − challenger_error).
+
+    Positive ``delta_mae`` means the challenger has lower MAE (wins). Item ids
+    must overlap — unpaired rows are dropped so both sides see the same basket.
+    """
     settings = settings or get_settings()
-    by_id_ours = {p.item_id: p for p in ours}
-    by_id_base = {p.item_id: p for p in baseline}
-    ids = sorted(set(by_id_ours) & set(by_id_base))
-    if not ids:
+    by_challenger = {p.item_id: p for p in challenger}
+    by_baseline = {p.item_id: p for p in baseline}
+    shared_ids = sorted(set(by_challenger) & set(by_baseline))
+    if not shared_ids:
         raise ValueError("No overlapping item ids for paired comparison")
 
     deltas = np.array(
-        [by_id_base[i].error - by_id_ours[i].error for i in ids], dtype=float
+        [
+            by_baseline[item_id].error - by_challenger[item_id].error
+            for item_id in shared_ids
+        ],
+        dtype=float,
     )
-    ours_mae = float(np.mean([by_id_ours[i].error for i in ids]))
-    base_mae = float(np.mean([by_id_base[i].error for i in ids]))
-    delta_mae = base_mae - ours_mae
-    relative = delta_mae / base_mae if base_mae > 0 else 0.0
+    challenger_mae = float(
+        np.mean([by_challenger[item_id].error for item_id in shared_ids])
+    )
+    baseline_mae = float(
+        np.mean([by_baseline[item_id].error for item_id in shared_ids])
+    )
+    delta_mae = baseline_mae - challenger_mae
+    relative = delta_mae / baseline_mae if baseline_mae > 0 else 0.0
 
-    rng = np.random.default_rng(42)
-    n = len(deltas)
-    boot = np.empty(settings.bootstrap_samples)
-    for i in range(settings.bootstrap_samples):
-        boot[i] = deltas[rng.integers(0, n, n)].mean()
-    ci_low = float(np.quantile(boot, 0.025))
-    ci_high = float(np.quantile(boot, 0.975))
-    victory = (
-        relative >= settings.victory_relative_mae and ci_low > 0
+    ci_low, ci_high = _bootstrap_mean_ci(
+        deltas, n_samples=settings.bootstrap_samples
     )
+    victory = relative >= settings.victory_relative_mae and ci_low > 0
 
     return ComparisonResult(
-        ours=ours_name,
+        challenger=challenger_name,
         baseline=baseline_name,
-        battleground=battleground,
+        eval_set=eval_set,
         delta_mae=delta_mae,
         relative_improvement=relative,
         ci_low=ci_low,
         ci_high=ci_high,
-        n=n,
+        n=len(shared_ids),
         victory=victory,
     )
 
 
 def format_metrics_row(m: RunMetrics) -> str:
+    """One markdown table row for a leaderboard."""
     ci = ""
     if m.mae_ci_low is not None and m.mae_ci_high is not None:
         ci = f"  (95% CI ${m.mae_ci_low:,.2f}–${m.mae_ci_high:,.2f})"
@@ -140,9 +185,10 @@ def format_metrics_row(m: RunMetrics) -> str:
 
 
 def format_comparison(c: ComparisonResult) -> str:
+    """One markdown bullet summarizing a paired comparison."""
     flag = "VICTORY" if c.victory else "not yet"
     return (
-        f"**{c.ours}** vs **{c.baseline}** on `{c.battleground}` (n={c.n}): "
+        f"**{c.challenger}** vs **{c.baseline}** on `{c.eval_set}` (n={c.n}): "
         f"ΔMAE=${c.delta_mae:,.2f} ({c.relative_improvement:.1%} relative), "
         f"95% CI [${c.ci_low:,.2f}, ${c.ci_high:,.2f}] — {flag}"
     )
