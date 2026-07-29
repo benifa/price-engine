@@ -4,9 +4,12 @@
 # Data: ed-donner/items_prompts_full (800k train) — Hub load inside Modal.
 # Eval golden: data/golden/amazon.parquet (lite test).
 # Format: amazon_list (question + text + "Price is $") — already baked into Hub rows.
+# Checkpoint lands at /data/checkpoints/list_price_qlora (renamed from amazon_replica).
+# Prefer `priceengine publish-model --tag vX.Y.Z` after eval for versioned Hub releases.
+# Optional one-shot push during train (no tag / model card): set hub_model_id below.
 name: list_price_qlora
 base_model: meta-llama/Llama-3.2-3B
-hub_model_id: null
+hub_model_id: null  # e.g. benifa/list-price-qlora — or leave null and use CLI publish
 
 dataset:
   hub_id: ed-donner/items_prompts_full

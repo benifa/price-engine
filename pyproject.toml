@@ -7,11 +7,13 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
     "datasets>=3.0",
+    "huggingface_hub>=0.26",
     "matplotlib>=3.9",
     "modal>=1.1.4",
     "numpy>=2.0",
     "pandas>=2.2",
     "peft>=0.14",
+    "plotly>=5.24",
     "pyarrow>=17.0",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
@@ -21,7 +23,6 @@ dependencies = [
     "transformers>=4.46",
     "trl>=0.12",
     "typer>=0.15",
-    "plotly>=5.24",
     "wandb>=0.18",
 ]
 

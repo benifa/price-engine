@@ -145,6 +145,20 @@ def eval_cmd(
     out: Path = typer.Option(
         Path("reports/leaderboard.md"), help="Leaderboard markdown path"
     ),
+    visualize: bool = typer.Option(
+        False,
+        "--visualize/--no-visualize",
+        help="Also write Plotly HTML (reports/eval_report.html)",
+    ),
+    report_version: str = typer.Option(
+        "",
+        help="Optional version tag for HTML (e.g. v0.1.0 → eval_report-v0.1.0.html)",
+    ),
+    open_browser: bool = typer.Option(
+        False,
+        "--open/--no-open",
+        help="Open the HTML report when --visualize is set",
+    ),
 ):
     """Grade models on the Amazon golden set."""
     settings = _bootstrap()
@@ -274,6 +288,21 @@ def eval_cmd(
     )
     typer.echo(f"Wrote {path}")
 
+    if visualize:
+        from priceengine.eval.visualization import write_eval_html
+
+        json_path = path.with_suffix(".json")
+        html_path = write_eval_html(
+            json_path,
+            golden=golden,
+            out=settings.reports_dir / "eval_report.html",
+            eval_set=set_name,
+            settings=settings,
+            open_browser=open_browser,
+            version=report_version.strip() or None,
+        )
+        typer.echo(f"Wrote {html_path}")
+
 
 @app.command("visualize-eval")
 def visualize_eval_cmd(
@@ -288,6 +317,10 @@ def visualize_eval_cmd(
         Path("reports/eval_report.html"), help="Self-contained HTML report path"
     ),
     eval_set: str = typer.Option("", help="Label in the report title"),
+    version: str = typer.Option(
+        "",
+        help="Optional version tag (writes eval_report-{version}.html)",
+    ),
     open_browser: bool = typer.Option(
         True, "--open/--no-open", help="Open the HTML file in your browser"
     ),
@@ -307,8 +340,79 @@ def visualize_eval_cmd(
         eval_set=eval_set.strip() or None,
         settings=settings,
         open_browser=open_browser,
+        version=version.strip() or None,
     )
     typer.echo(f"Wrote {path}")
+
+
+@app.command("publish-model")
+def publish_model_cmd(
+    adapter_path: Path = typer.Option(
+        ...,
+        "--adapter-path",
+        help="Local LoRA adapter directory (adapter_config.json + weights)",
+    ),
+    repo: str = typer.Option(
+        "benifa/list-price-qlora",
+        help="Hugging Face model repo id",
+    ),
+    tag: str = typer.Option(
+        ...,
+        "--tag",
+        help="Revision tag (v0.1.0 or 2026-07-28)",
+    ),
+    public: bool = typer.Option(
+        False,
+        "--public/--private",
+        help="Hub visibility (default: private)",
+    ),
+    leaderboard_md: Path = typer.Option(
+        Path("reports/leaderboard.md"),
+        help="Metrics snapshot embedded in the model card",
+    ),
+):
+    """Upload a versioned LoRA adapter to the Hugging Face Hub."""
+    settings = _bootstrap()
+    from priceengine.training.publish import publish_adapter
+
+    result = publish_adapter(
+        adapter_path,
+        repo_id=repo,
+        tag=tag,
+        private=not public,
+        leaderboard_md=leaderboard_md if leaderboard_md.exists() else None,
+        settings=settings,
+    )
+    typer.echo(json.dumps(result, indent=2))
+
+
+@app.command("export-ollama")
+def export_ollama_cmd(
+    adapter_path: Path = typer.Option(
+        ...,
+        "--adapter-path",
+        help="Local LoRA adapter directory",
+    ),
+    out_dir: Path = typer.Option(
+        Path("artifacts/ollama"),
+        help="Where to write Modelfile + EXPORT_STEPS.sh",
+    ),
+    gguf_name: str = typer.Option(
+        "list-price-qlora.gguf",
+        help="Expected GGUF filename referenced by the Modelfile",
+    ),
+):
+    """Stage Modelfile + merge/GGUF recipe (does not run conversion)."""
+    _bootstrap()
+    from priceengine.training.ollama_export import prepare_ollama_export
+
+    result = prepare_ollama_export(
+        adapter_path,
+        out_dir=out_dir,
+        gguf_name=gguf_name,
+    )
+    typer.echo(json.dumps(result, indent=2))
+    typer.echo(f"Next: open {result['recipe']} and run the merge/convert steps.")
 
 
 if __name__ == "__main__":

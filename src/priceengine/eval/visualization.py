@@ -21,9 +21,16 @@ import plotly.graph_objects as go
 from priceengine.config import Settings, get_settings
 from priceengine.data_prep import load_eval_items
 from priceengine.eval.metrics import is_hit, summarize
+from priceengine.eval.published_baseline import BASELINE_NAME
 from priceengine.models import Prediction
 
 logger = logging.getLogger(__name__)
+
+# Prefer these two for the overlay chart when present.
+_OVERLAY_PRIORITY = (
+    "list_price_qlora",
+    BASELINE_NAME,
+)
 
 
 def _hit_color(error: float, truth: float, settings: Settings) -> str:
@@ -62,6 +69,7 @@ def _frame_for_model(
                 "model": name,
                 "item_id": pred.item_id,
                 "title": short,
+                "full_title": title,
                 "truth": pred.truth,
                 "guess": pred.guess,
                 "error": pred.error,
@@ -112,6 +120,55 @@ def _scatter_figure(frame: pd.DataFrame, title: str) -> go.Figure:
     fig.update_xaxes(range=[0, max_val])
     fig.update_yaxes(range=[0, max_val])
     fig.update_layout(template="plotly_white", showlegend=False)
+    return fig
+
+
+def _overlay_scatter(
+    results: dict[str, list[Prediction]],
+    titles: dict[str, str],
+    settings: Settings,
+) -> go.Figure | None:
+    """Our model vs published baseline on one chart (when both are present)."""
+    names = [n for n in _OVERLAY_PRIORITY if n in results]
+    if len(names) < 2:
+        # Fall back: first two non-median models if available.
+        skip = {"Same-category train median", "Overall train median"}
+        names = [n for n in results if n not in skip][:2]
+    if len(names) < 2:
+        return None
+
+    frames = []
+    for name in names:
+        frame = _frame_for_model(name, results[name], titles, settings)
+        frames.append(frame)
+    combined = pd.concat(frames, ignore_index=True)
+    max_val = float(max(combined["truth"].max(), combined["guess"].max(), 1.0))
+
+    fig = px.scatter(
+        combined,
+        x="truth",
+        y="guess",
+        color="model",
+        title="Overlay — predicted vs actual (our model vs baseline)",
+        labels={"truth": "Actual price ($)", "guess": "Predicted price ($)"},
+        hover_data=["title", "error"],
+        width=900,
+        height=700,
+        opacity=0.75,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=[0, max_val],
+            y=[0, max_val],
+            mode="lines",
+            line=dict(width=2, dash="dash", color="deepskyblue"),
+            name="y = x",
+            hoverinfo="skip",
+        )
+    )
+    fig.update_xaxes(range=[0, max_val])
+    fig.update_yaxes(range=[0, max_val])
+    fig.update_layout(template="plotly_white")
     return fig
 
 
@@ -204,6 +261,49 @@ def _mae_bar_figure(
     return fig
 
 
+def _worst_misses_html(
+    name: str,
+    preds: list[Prediction],
+    titles: dict[str, str],
+    *,
+    top_n: int = 20,
+) -> str:
+    ranked = sorted(preds, key=lambda p: p.error, reverse=True)[:top_n]
+    rows = [
+        "<table border='1' cellpadding='6' cellspacing='0' "
+        "style='border-collapse:collapse;width:100%;font-size:14px'>",
+        "<thead><tr>"
+        "<th>#</th><th>Title</th><th>Truth</th><th>Guess</th><th>Error</th>"
+        "</tr></thead><tbody>",
+    ]
+    for i, pred in enumerate(ranked, start=1):
+        title = titles.get(pred.item_id, pred.item_id)
+        if len(title) > 60:
+            title = title[:60] + "…"
+        rows.append(
+            "<tr>"
+            f"<td>{i}</td>"
+            f"<td>{_escape(title)}</td>"
+            f"<td>${pred.truth:,.2f}</td>"
+            f"<td>${pred.guess:,.2f}</td>"
+            f"<td>${pred.error:,.2f}</td>"
+            "</tr>"
+        )
+    rows.append("</tbody></table>")
+    return (
+        f"<h3>Worst {top_n} misses — {_escape(name)}</h3>\n" + "\n".join(rows)
+    )
+
+
+def _escape(text: str) -> str:
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
 def write_eval_html(
     leaderboard_json: Path,
     *,
@@ -212,8 +312,15 @@ def write_eval_html(
     eval_set: str | None = None,
     settings: Settings | None = None,
     open_browser: bool = False,
+    version: str | None = None,
+    worst_n: int = 20,
 ) -> Path:
-    """Build a multi-model HTML report from ``leaderboard.json``."""
+    """Build a multi-model HTML report from ``leaderboard.json``.
+
+    When ``version`` is set (e.g. ``v0.1.0``), also copies the report to
+    ``reports/eval_report-{version}.html`` beside ``out`` if ``out`` is the
+    default stem, or uses ``out`` as-is when the caller already versioned it.
+    """
     settings = settings or get_settings()
     results = _load_predictions(leaderboard_json)
     if not results:
@@ -222,20 +329,30 @@ def write_eval_html(
     eval_set = eval_set or leaderboard_json.stem.replace("leaderboard-", "") or "amazon"
     titles = _titles_by_id(golden)
 
+    if version and out.name == "eval_report.html":
+        out = out.with_name(f"eval_report-{version}.html")
+
+    version_note = f" · version <code>{version}</code>" if version else ""
     parts: list[str] = [
         "<!DOCTYPE html><html><head><meta charset='utf-8'>",
         "<title>Price Engine — eval report</title>",
         "<style>body{font-family:system-ui,sans-serif;margin:2rem;max-width:960px}"
-        "h1,h2{font-weight:600} .meta{color:#555;margin-bottom:2rem}</style>",
+        "h1,h2,h3{font-weight:600} .meta{color:#555;margin-bottom:2rem}"
+        "table{margin:1rem 0 2rem} th{background:#f4f4f4;text-align:left}</style>",
         "</head><body>",
         "<h1>Price Engine — eval report</h1>",
         f"<p class='meta'>Source: <code>{leaderboard_json}</code> · "
-        f"eval set <code>{eval_set}</code> · "
+        f"eval set <code>{eval_set}</code>{version_note} · "
         "green = hit (&lt;$40 or &lt;20%), orange = near, red = miss</p>",
     ]
 
     mae_fig = _mae_bar_figure(results, settings, eval_set)
     parts.append(mae_fig.to_html(full_html=False, include_plotlyjs="cdn"))
+
+    overlay = _overlay_scatter(results, titles, settings)
+    if overlay is not None:
+        parts.append("<h2>Model overlay</h2>")
+        parts.append(overlay.to_html(full_html=False, include_plotlyjs=False))
 
     for name, preds in results.items():
         metrics = summarize(name, eval_set, preds, settings=settings, bootstrap=False)
@@ -253,14 +370,21 @@ def write_eval_html(
             ),
         )
         trend = _error_trend_figure([p.error for p in preds], name)
-        # First model includes plotly.js from MAE chart; later figs omit the bundle.
         parts.append(scatter.to_html(full_html=False, include_plotlyjs=False))
         parts.append(trend.to_html(full_html=False, include_plotlyjs=False))
+        parts.append(_worst_misses_html(name, preds, titles, top_n=worst_n))
 
     parts.append("</body></html>")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(parts))
     logger.info("Wrote eval HTML → %s", out)
+
+    # Always keep a stable latest copy for CLI convenience.
+    latest = settings.reports_dir / "eval_report.html"
+    if out.resolve() != latest.resolve():
+        latest.write_text(out.read_text())
+        logger.info("Also wrote %s", latest)
+
     if open_browser:
         webbrowser.open(out.resolve().as_uri())
     return out

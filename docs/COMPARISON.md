@@ -1,5 +1,9 @@
 # Comparison protocol vs `ed-donner/price-2025-11-28`
 
+Fair eval of our **Modal/HF QLoRA adapter** against the published baseline on the
+**same** Amazon golden items. Visual HTML (`eval --visualize`) is an optional
+report of the same predictions — it does not change the victory math.
+
 ## Fairness rules
 
 1. **Same base:** `meta-llama/Llama-3.2-3B`.
@@ -28,8 +32,17 @@
 | ID | Adapter |
 |----|---------|
 | Published baseline | Amazon adapter via Modal `pricer-service` |
-| list_price_qlora | Our list-price QLoRA adapter |
+| list_price_qlora | Our list-price QLoRA adapter (Modal train; Hub tag when published) |
 | Same-category train median | Guess median train price in that category |
 | Overall train median | Guess one number: median of all train prices |
 
-Implementation: `src/priceengine/eval/`.
+## Reports
+
+| Artifact | Command |
+|----------|---------|
+| `reports/leaderboard.md` + `.json` | `priceengine eval` |
+| `reports/eval_report.html` (overlay, worst misses) | `eval --visualize` or `visualize-eval` |
+| Versioned HTML | `--report-version v0.1.0` → `eval_report-v0.1.0.html` |
+
+Implementation: `src/priceengine/eval/`. Publish tagged adapters after a clean
+eval: [`PUBLISH.md`](PUBLISH.md).
