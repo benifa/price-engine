@@ -1,17 +1,7 @@
-"""Pricer protocol and local model adapters for the fair leaderboard.
+"""Local pricers for the leaderboard.
 
-Anything that can turn an ``EvalItem`` into a dollar guess implements ``Pricer``.
-The CLI / leaderboard never care *how* the guess was produced — only ``name``
-and ``price(item)``.
-
-Adapters here
--------------
-* ``SameCategoryMedianPricer`` / ``OverallMedianPricer`` — CPU sanity floors
-  (guess a training-set median; no neural net)
-* ``FineTunedPricer`` — local LoRA (or full) causal LM completing ``Price is $``
-
-Remote adapters live in ``published_baseline`` (published checkpoint) and
-``adapter_scoring`` (our Modal batch job).
+Anything with ``name`` + ``price(item) -> float`` can be scored.
+Median baselines live here; Modal adapters are in ``baseline_pricer`` / ``modal_score``.
 """
 
 from __future__ import annotations
@@ -25,13 +15,13 @@ from priceengine.models import EvalItem
 
 logger = logging.getLogger(__name__)
 
+# Plain-English floors: "always guess a train median" — beat these before claiming wins.
+SAME_CATEGORY_MEDIAN_NAME = "Naive floor · category median"
+OVERALL_TRAIN_MEDIAN_NAME = "Naive floor · always train median"
+
 
 def extract_price(text: str) -> float:
-    """Parse the first number from model output after ``Price is $``.
-
-    Returns ``0.0`` if nothing parses — treated as a failed generation, which
-    correctly hurts MAE so silent parse failures do not look like wins.
-    """
+    """Parse the first number from model output. Returns 0.0 if nothing parses."""
     text = text.replace("$", "").replace(",", "")
     match = re.search(r"[-+]?\d*\.\d+|\d+", text)
     return float(match.group()) if match else 0.0
@@ -46,25 +36,13 @@ def _median(values: list[float]) -> float:
 
 @runtime_checkable
 class Pricer(Protocol):
-    """Minimal scoring interface used by ``leaderboard.run_pricer``."""
-
     name: str
 
     def price(self, item: EvalItem) -> float: ...
 
 
-# Leaderboard labels — plain English so outsiders can read the table.
-SAME_CATEGORY_MEDIAN_NAME = "Same-category train median"
-OVERALL_TRAIN_MEDIAN_NAME = "Overall train median"
-
-
 class SameCategoryMedianPricer:
-    """Guess the median train price among items in the *same category*.
-
-    Example: for an Electronics product, predict the median of all Electronics
-    prices seen in training. Falls back to the overall train median if the
-    category is unseen. A real model should beat this floor.
-    """
+    """Guess the median train price in the same category (fallback: overall median)."""
 
     def __init__(
         self,
@@ -90,10 +68,7 @@ class SameCategoryMedianPricer:
 
 
 class OverallMedianPricer:
-    """Always guess one number: the median price across the whole train set.
-
-    Ignores the product text entirely — the weakest useful baseline.
-    """
+    """Always guess one number: the median of all train prices."""
 
     def __init__(self, value: float, name: str = OVERALL_TRAIN_MEDIAN_NAME):
         self.value = value
@@ -103,19 +78,8 @@ class OverallMedianPricer:
         return self.value
 
 
-# Back-compat aliases (older imports / notebooks).
-CategoryMedianPricer = SameCategoryMedianPricer
-ConstantPricer = OverallMedianPricer
-
 class FineTunedPricer:
-    """Local Hugging Face LoRA that completes the list-price prompt.
-
-    Generation knobs match the published baseline (seed 42, ``max_new_tokens=5``,
-    parse after ``Price is $``) so local macOS smoke tests are comparable to
-    Modal scores — see ``docs/COMPARISON.md``.
-
-    On macOS (MPS/CPU) pass ``load_in_4bit=False``; bitsandbytes needs CUDA.
-    """
+    """Local LoRA that completes the list-price prompt (macOS: load_in_4bit=False)."""
 
     def __init__(
         self,
@@ -130,12 +94,14 @@ class FineTunedPricer:
     ):
         from transformers import AutoTokenizer, set_seed
 
-        from priceengine.config import BASE_MODEL, SUMMARY_CUTOFF
+        from priceengine.config import BASE_MODEL, MAX_DESCRIPTION_TOKENS
 
         base_model = base_model or BASE_MODEL
         self.name = name or model_id
         self.max_new_tokens = max_new_tokens
-        self.cutoff_tokens = SUMMARY_CUTOFF if cutoff_tokens is None else cutoff_tokens
+        self.cutoff_tokens = (
+            MAX_DESCRIPTION_TOKENS if cutoff_tokens is None else cutoff_tokens
+        )
         set_seed(42)
 
         self.tokenizer = AutoTokenizer.from_pretrained(base_model)
@@ -189,10 +155,9 @@ class FineTunedPricer:
         from transformers import set_seed
 
         from priceengine.config import PRICE_PREFIX
-        from priceengine.training.prompts import prompt_for_eval_item, truncate_text
+        from priceengine.prompts import prompt_for_eval_item, truncate_text
 
-        # Re-seed every call so item order does not change generations (fair eval).
-        set_seed(42)
+        set_seed(42)  # same seed each call so item order does not change outputs
         body, _ = truncate_text(
             item.text_for_pricing(), self.tokenizer, self.cutoff_tokens
         )

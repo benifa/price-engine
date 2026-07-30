@@ -2,7 +2,7 @@
 
 import pytest
 
-from priceengine.training.publish import build_model_card, normalize_tag
+from priceengine.train.publish import build_model_card, normalize_tag
 
 
 def test_normalize_tag_semver():

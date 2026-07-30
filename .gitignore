@@ -30,8 +30,6 @@ outputs/
 
 # Generated eval / prep reports
 reports/**
-!reports/token_length/
-!reports/token_length/.gitkeep
 !reports/README.md
 
 # OS / editor

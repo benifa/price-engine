@@ -10,7 +10,7 @@ Modal/HF QLoRA train  →  eval (+ HTML)  →  publish-model --tag vX.Y.Z  →  
 |--|--|
 | **What you publish** | PEFT LoRA adapter + model card + Hub revision tag |
 | **What other apps load** | `base_model` + `adapter_id` + `revision=` |
-| **What this is not** | Ollama/GGUF upload (optional later — [`OLLAMA.md`](OLLAMA.md)) |
+| **What this is not** | A full merged model upload (PEFT adapter only) |
 
 Training runtime remains **Modal + Hugging Face**. Publishing does not retrain.
 
@@ -44,7 +44,7 @@ Requires `HF_TOKEN` with write access to the repo.
 | Hub revision tag | Pin consumers to `revision="v0.1.0"` |
 
 In-training push remains optional via `hub_model_id` in
-[`list_price_qlora.yaml`](../training/configs/list_price_qlora.yaml). Prefer
+[`qlora.yaml`](../configs/qlora.yaml). Prefer
 CLI publish so you can attach metrics and an explicit tag after eval.
 
 ## Consumer contract

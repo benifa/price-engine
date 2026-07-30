@@ -1,8 +1,4 @@
-"""Score pricers on a golden set and write leaderboard markdown + JSON.
-
-CLI entrypoints ``eval`` / ``eval-baselines`` call into this module. Model
-adapters live in ``pricers`` / ``published_baseline``; math lives in ``metrics``.
-"""
+"""Score pricers and write leaderboard markdown + JSON."""
 
 from __future__ import annotations
 
@@ -13,33 +9,33 @@ from pathlib import Path
 from priceengine.config import Settings, get_settings
 from priceengine.eval.metrics import (
     format_comparison,
-    format_metrics_row,
     paired_compare,
     summarize,
 )
 from priceengine.eval.pricers import Pricer
+from priceengine.eval.roles import role_for, short_label
 from priceengine.models import ComparisonResult, EvalItem, Prediction
 
 logger = logging.getLogger(__name__)
 
-_PROTOCOL_NOTES = (
-    "- Hit = absolute error < $40 **or** relative error < 20%.",
-    "- Fine-tuned models use the list-price prompt format (``Price is $``).",
-    "- MAE CI is a 95% bootstrap over items; paired ΔMAE CI is a paired bootstrap.",
+_PROTOCOL_NOTES_TEMPLATE = (
+    "- Hit = absolute error < ${hit_abs:,.0f} **or** relative error < {hit_rel:.0%}.",
+    "- Fine-tuned models use the list-price prompt (``Price is $``).",
+    "- MAE CI is a 95% bootstrap; paired ΔMAE CI is a paired bootstrap.",
 )
 
 
 def run_pricer(pricer: Pricer, items: list[EvalItem]) -> list[Prediction]:
-    """Score every golden item with one pricer; return per-item predictions."""
+    """Score every golden item with one pricer."""
     predictions: list[Prediction] = []
     for index, item in enumerate(items):
-        guess = float(pricer.price(item))
+        estimate = float(pricer.price(item))
         predictions.append(
             Prediction(
-                item_id=item.id,
-                guess=guess,
-                truth=item.price,
-                error=abs(guess - item.price),
+                item_id=item.item_id,
+                estimate=estimate,
+                actual=item.price,
+                error=abs(estimate - item.price),
                 truncated=item.truncated,
                 category=item.category,
                 condition=item.condition,
@@ -58,11 +54,7 @@ def write_leaderboard(
     settings: Settings | None = None,
     path: Path | None = None,
 ) -> Path:
-    """Write ``leaderboard-{eval_set}.md`` and a twin ``.json`` of raw predictions.
-
-    The markdown file is human-readable; the JSON is reused by the CLI to skip
-    re-scoring the published baseline when item ids still match.
-    """
+    """Write leaderboard markdown and a twin JSON of raw predictions."""
     settings = settings or get_settings()
     settings.reports_dir.mkdir(parents=True, exist_ok=True)
     path = path or settings.reports_dir / f"leaderboard-{eval_set}.md"
@@ -70,12 +62,28 @@ def write_leaderboard(
     lines = [
         f"# Leaderboard — `{eval_set}`",
         "",
-        "| Model | n | MAE | Median APE | Hit rate | RMSLE |",
-        "|---|---:|---:|---:|---:|---:|",
+        "| Rank | Role | Model | n | MAE | Median APE | Hit rate | RMSLE |",
+        "|---:|---|---|---:|---:|---:|---:|---:|",
     ]
-    for name, preds in results.items():
+    ranked = sorted(
+        results.items(),
+        key=lambda kv: summarize(
+            kv[0], eval_set, kv[1], settings=settings, bootstrap=False
+        ).mae,
+    )
+    for rank, (name, preds) in enumerate(ranked, start=1):
         metrics = summarize(name, eval_set, preds, settings=settings)
-        lines.append(format_metrics_row(metrics))
+        ci = ""
+        if metrics.mae_ci_low is not None and metrics.mae_ci_high is not None:
+            ci = (
+                f"  (95% CI ${metrics.mae_ci_low:,.2f}–"
+                f"${metrics.mae_ci_high:,.2f})"
+            )
+        lines.append(
+            f"| {rank} | {role_for(name)} | {short_label(name)} | {metrics.n} | "
+            f"${metrics.mae:,.2f}{ci} | {metrics.median_ape:.1%} | "
+            f"{metrics.hit_rate:.1%} | {metrics.rmsle:.3f} |"
+        )
 
     lines.append("")
     if comparisons:
@@ -87,7 +95,13 @@ def write_leaderboard(
 
     lines.append("## Protocol")
     lines.append("")
-    lines.extend(_PROTOCOL_NOTES)
+    lines.extend(
+        note.format(
+            hit_abs=settings.hit_abs_dollars,
+            hit_rel=settings.hit_rel_fraction,
+        )
+        for note in _PROTOCOL_NOTES_TEMPLATE
+    )
     lines.append("")
 
     path.write_text("\n".join(lines))
@@ -113,7 +127,6 @@ def compare_to_baseline(
     eval_set: str,
     settings: Settings | None = None,
 ) -> ComparisonResult:
-    """Look up two named result lists and run ``paired_compare``."""
     return paired_compare(
         challenger_name,
         baseline_name,

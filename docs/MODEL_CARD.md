@@ -6,10 +6,10 @@
 ## Model details
 
 - **Base:** `meta-llama/Llama-3.2-3B` (base, not Instruct)
-- **Adaptation:** QLoRA on **Modal** (`training/configs/list_price_qlora.yaml`)
-- **Training data:** Amazon list-price prompts (`ed-donner/items_prompts_full` on Modal; local mirrors `benifa/items_*`)
+- **Adaptation:** QLoRA on **Modal** (`configs/qlora.yaml`)
+- **Training data:** Amazon list-price prompts (`benifa/items_prompts_full` on Modal; product tables `benifa/items_*`)
 - **Distributed as:** PEFT LoRA adapter on Hugging Face Hub (versioned tags via
-  `priceengine publish-model`) — **not** an Ollama/GGUF primary artifact
+  `priceengine publish-model`)
 - **Languages:** English product descriptions
 - **License:** Code MIT; base model subject to Meta Llama license
 
@@ -19,18 +19,18 @@ Estimate an Amazon-style list price from a free-text description. Research and
 pricing tooling — not sole authority for high-stakes financial decisions.
 
 Other apps should load **base + tagged adapter** (see [`PUBLISH.md`](PUBLISH.md)).
-Local Ollama is optional after merge/GGUF export ([`OLLAMA.md`](OLLAMA.md)).
 
 ## Out-of-scope
 
 - Items without text descriptions
 - Prices outside $1–$999
 - Exact collectibles / one-of-ones with no comps
-- Using this card to imply Ollama is the training runtime
+- Sole authority for high-stakes financial decisions
 
 ## Evaluation data
 
 - **Primary:** Amazon lite test (`benifa/items_lite` → `data/golden/amazon.parquet`)
+- **How to run / fairness rules:** [`EVAL.md`](EVAL.md)
 - **Visual report:** `reports/eval_report*.html` from `priceengine eval --visualize`
 
 ## Metrics (to be filled)

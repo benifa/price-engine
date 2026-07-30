@@ -6,8 +6,8 @@ from priceengine.models import Prediction
 
 def test_hit_and_summarize():
     preds = [
-        Prediction(item_id="a", guess=100, truth=100, error=0),
-        Prediction(item_id="b", guess=50, truth=100, error=50),
+        Prediction(item_id="a", estimate=100, actual=100, error=0),
+        Prediction(item_id="b", estimate=50, actual=100, error=50),
     ]
     assert is_hit(0, 100)
     assert not is_hit(50, 100)
@@ -19,16 +19,16 @@ def test_hit_and_summarize():
 
 def test_paired_compare_victory_flag():
     baseline = [
-        Prediction(item_id="1", guess=200, truth=100, error=100),
-        Prediction(item_id="2", guess=200, truth=100, error=100),
-        Prediction(item_id="3", guess=200, truth=100, error=100),
-        Prediction(item_id="4", guess=200, truth=100, error=100),
+        Prediction(item_id="1", estimate=200, actual=100, error=100),
+        Prediction(item_id="2", estimate=200, actual=100, error=100),
+        Prediction(item_id="3", estimate=200, actual=100, error=100),
+        Prediction(item_id="4", estimate=200, actual=100, error=100),
     ]
     challenger = [
-        Prediction(item_id="1", guess=110, truth=100, error=10),
-        Prediction(item_id="2", guess=110, truth=100, error=10),
-        Prediction(item_id="3", guess=110, truth=100, error=10),
-        Prediction(item_id="4", guess=110, truth=100, error=10),
+        Prediction(item_id="1", estimate=110, actual=100, error=10),
+        Prediction(item_id="2", estimate=110, actual=100, error=10),
+        Prediction(item_id="3", estimate=110, actual=100, error=10),
+        Prediction(item_id="4", estimate=110, actual=100, error=10),
     ]
     cmp_ = paired_compare(
         "challenger", "baseline", challenger, baseline, eval_set="amazon"

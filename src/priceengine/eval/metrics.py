@@ -1,19 +1,14 @@
-"""Aggregate metrics and paired-bootstrap comparison (docs/COMPARISON.md).
+"""Eval metrics and paired-bootstrap victory test (docs/EVAL.md).
 
-Headline numbers
-----------------
-* **MAE** — mean absolute dollar error
-* **Median APE** — median absolute percentage error
-* **Hit rate** — share of items with error < $40 **or** < 20% of truth
-* **RMSLE** — root mean squared log error (symmetric-ish scale)
+Plain language
+--------------
+* MAE — average dollar miss
+* Median APE — typical percent miss
+* Hit rate — “close enough” (under $40 or under 20% of the true price)
+* RMSLE — error on a log scale (fairer across cheap vs expensive items)
 
-Victory vs published baseline
------------------------------
-On the same item ids, take per-item ``baseline_error - challenger_error``.
-Victory requires:
-
-1. Relative MAE improvement ≥ ``Settings.victory_relative_mae`` (default 25%), and
-2. The 95% paired-bootstrap CI on that mean delta has a lower bound > 0.
+Victory vs published baseline: at least 25% better MAE **and** the paired
+bootstrap CI still says the gain is positive (see ``paired_compare``).
 """
 
 from __future__ import annotations
@@ -26,17 +21,16 @@ from priceengine.config import Settings, get_settings
 from priceengine.models import ComparisonResult, Prediction, RunMetrics
 
 
-def _absolute_percentage_error(guess: float, truth: float) -> float:
-    if truth <= 0:
-        return 0.0 if guess == 0 else 1.0
-    return abs(guess - truth) / truth
+def _absolute_percentage_error(estimate: float, actual: float) -> float:
+    if actual <= 0:
+        return 0.0 if estimate == 0 else 1.0
+    return abs(estimate - actual) / actual
 
 
-def is_hit(error: float, truth: float, settings: Settings | None = None) -> bool:
-    """True when absolute or relative error falls under the configured thresholds."""
+def is_hit(error: float, actual: float, settings: Settings | None = None) -> bool:
     settings = settings or get_settings()
     return error < settings.hit_abs_dollars or (
-        truth > 0 and error / truth < settings.hit_rel_fraction
+        actual > 0 and error / actual < settings.hit_rel_fraction
     )
 
 
@@ -47,7 +41,6 @@ def _bootstrap_mean_ci(
     alpha: float = 0.05,
     seed: int = 42,
 ) -> tuple[float, float]:
-    """Percentile CI for the mean of ``values`` via nonparametric bootstrap."""
     rng = np.random.default_rng(seed)
     n = len(values)
     means = np.empty(n_samples)
@@ -67,7 +60,7 @@ def summarize(
     settings: Settings | None = None,
     bootstrap: bool = True,
 ) -> RunMetrics:
-    """Roll per-item predictions into one ``RunMetrics`` row for the leaderboard."""
+    """Roll per-item predictions into one leaderboard row."""
     settings = settings or get_settings()
     if not preds:
         return RunMetrics(
@@ -82,15 +75,14 @@ def summarize(
 
     errors = np.array([p.error for p in preds], dtype=float)
     apes = np.array(
-        [_absolute_percentage_error(p.guess, p.truth) for p in preds], dtype=float
+        [_absolute_percentage_error(p.estimate, p.actual) for p in preds], dtype=float
     )
     hits = np.array(
-        [is_hit(p.error, p.truth, settings) for p in preds], dtype=float
+        [is_hit(p.error, p.actual, settings) for p in preds], dtype=float
     )
-    truths = np.array([p.truth for p in preds], dtype=float)
-    # Clamp guesses at 0 so log1p is defined (parser may return 0 on failure).
-    guesses = np.array([max(0.0, p.guess) for p in preds], dtype=float)
-    rmsle = float(np.sqrt(np.mean((np.log1p(guesses) - np.log1p(truths)) ** 2)))
+    actuals = np.array([p.actual for p in preds], dtype=float)
+    estimates = np.array([max(0.0, p.estimate) for p in preds], dtype=float)
+    rmsle = float(np.sqrt(np.mean((np.log1p(estimates) - np.log1p(actuals)) ** 2)))
 
     ci_low = ci_high = None
     if bootstrap and len(preds) >= 10:
@@ -114,7 +106,7 @@ def summarize(
 def bootstrap_mae_ci(
     errors: np.ndarray, *, n_samples: int = 10_000, alpha: float = 0.05, seed: int = 42
 ) -> tuple[float, float]:
-    """Public wrapper kept for tests / notebooks — CI on mean absolute error."""
+    """CI on mean absolute error (used by tests)."""
     return _bootstrap_mean_ci(errors, n_samples=n_samples, alpha=alpha, seed=seed)
 
 
@@ -127,11 +119,7 @@ def paired_compare(
     eval_set: str,
     settings: Settings | None = None,
 ) -> ComparisonResult:
-    """Paired bootstrap on (baseline_error − challenger_error).
-
-    Positive ``delta_mae`` means the challenger has lower MAE (wins). Item ids
-    must overlap — unpaired rows are dropped so both sides see the same basket.
-    """
+    """Paired bootstrap on (baseline_error − challenger_error). Positive = win."""
     settings = settings or get_settings()
     by_challenger = {p.item_id: p for p in challenger}
     by_baseline = {p.item_id: p for p in baseline}
@@ -174,7 +162,6 @@ def paired_compare(
 
 
 def format_metrics_row(m: RunMetrics) -> str:
-    """One markdown table row for a leaderboard."""
     ci = ""
     if m.mae_ci_low is not None and m.mae_ci_high is not None:
         ci = f"  (95% CI ${m.mae_ci_low:,.2f}–${m.mae_ci_high:,.2f})"
@@ -185,7 +172,6 @@ def format_metrics_row(m: RunMetrics) -> str:
 
 
 def format_comparison(c: ComparisonResult) -> str:
-    """One markdown bullet summarizing a paired comparison."""
     flag = "VICTORY" if c.victory else "not yet"
     return (
         f"**{c.challenger}** vs **{c.baseline}** on `{c.eval_set}` (n={c.n}): "

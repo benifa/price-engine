@@ -1,10 +1,11 @@
-# QLoRA list-price specialist — Colab full-mode hyperparameters
-# (Ed Donner week-7 LITE_MODE=False recipe; see docs/TRAINING.md)
+# QLoRA list-price specialist — see docs/TRAINING.md
 #
-# Data: ed-donner/items_prompts_full (800k train) — Hub load inside Modal.
+# Data (preferred): benifa/items_prompts_full — Hub load inside Modal.
+# Fallback: set hub_id: null and use /data/hf_dataset from
+#   `priceengine prepare-data` → `priceengine build-local-sft`
 # Eval golden: data/golden/amazon.parquet (lite test).
-# Format: amazon_list (question + text + "Price is $") — already baked into Hub rows.
-# Checkpoint lands at /data/checkpoints/list_price_qlora (renamed from amazon_replica).
+# Format: list_price (question + text + "Price is $").
+# Checkpoint: /data/checkpoints/list_price_qlora
 # Prefer `priceengine publish-model --tag vX.Y.Z` after eval for versioned Hub releases.
 # Optional one-shot push during train (no tag / model card): set hub_model_id below.
 name: list_price_qlora
@@ -12,7 +13,8 @@ base_model: meta-llama/Llama-3.2-3B
 hub_model_id: null  # e.g. benifa/list-price-qlora — or leave null and use CLI publish
 
 dataset:
-  hub_id: ed-donner/items_prompts_full
+  hub_id: benifa/items_prompts_full  # null → local_dir fallback
+  local_dir: /data/hf_dataset        # from build-local-sft (Modal volume)
   val_split: val
   val_size: 1000
 

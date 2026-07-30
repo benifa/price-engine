@@ -1,19 +1,11 @@
-"""Build local train/val/test + golden datasets from Hugging Face Hub.
+"""Hub → local parquet splits + golden set.
 
-This is step 1 of the project (see ``docs/DESIGN.md``):
+Step 1 of the loop::
 
-    Hub Amazon list-price datasets  →  ``data/splits/``, ``data/combined/``, ``data/golden/``
+    Hub datasets  →  data/splits/  +  data/golden/amazon.parquet
 
-Downstream consumers:
-
-* ``training/`` — reads ``data/splits/*.parquet`` to build prompt/completion examples
-* ``eval/`` — scores pricers on ``data/golden/amazon.parquet`` (the held-out golden set)
-
-Two sizes are supported:
-
-* **lite** — small official Hub splits; golden set = the lite *test* split
-* **full** — subsample of the large Hub train/val; golden set is *still* lite test,
-  and those titles are excluded from train/val so eval is not contaminated
+* lite — small official splits; golden = lite test
+* full — large subsample; golden is still lite test (those titles held out of train/val)
 """
 
 from __future__ import annotations
@@ -23,7 +15,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from priceengine.config import PRICE_MAX, PRICE_MIN, Settings
-from priceengine.data_prep.parquet_records import (
+from priceengine.data.parquet import (
     products_to_eval_items,
     save_eval_items,
     save_json,
@@ -33,22 +25,14 @@ from priceengine.models import ProductListing
 
 logger = logging.getLogger(__name__)
 
-# Published mirrors under the project owner's Hub account (see README).
-HF_USER = "benifa"
-LITE_DATASET_ID = f"{HF_USER}/items_lite"
-FULL_DATASET_ID = f"{HF_USER}/items_full"
+LITE_DATASET_ID = "benifa/items_lite"
+FULL_DATASET_ID = "benifa/items_full"
 _DATASET_BY_SIZE = {"lite": LITE_DATASET_ID, "full": FULL_DATASET_ID}
-
-# Hub split name → local filename stem under ``data/splits/``.
 _HUB_SPLITS = (("train", "train"), ("validation", "val"), ("test", "test"))
 
 
 def clamp_usd_price(price: float) -> float:
-    """Round to the nearest dollar and clamp to [$PRICE_MIN, $PRICE_MAX].
-
-    Llama tokenizers encode integers 0–999 as a *single* token. Keeping labels in
-    that range makes the completion ``Price is $NNN.00`` cheap and stable to learn.
-    """
+    """Round to nearest dollar and clamp to [$1, $999] (single Llama token)."""
     return float(max(PRICE_MIN, min(PRICE_MAX, round(price))))
 
 
@@ -59,12 +43,7 @@ def hub_row_to_product(
     index: int,
     id_prefix: str = "amazon",
 ) -> ProductListing | None:
-    """Map one Hub row to a ``ProductListing``, or ``None`` if it is unusable.
-
-    Expected Hub fields: ``title``, ``summary`` (description text), ``price``,
-    optional ``category`` / ``id``. Rows outside [$PRICE_MIN, $PRICE_MAX] or with
-    empty text are dropped rather than written into training data.
-    """
+    """Map one Hub row → ProductListing, or None if unusable."""
     title = (row.get("title") or "").strip()
     summary = (row.get("summary") or title).strip()
     if not title and not summary:
@@ -77,15 +56,13 @@ def hub_row_to_product(
     if price < PRICE_MIN or price > PRICE_MAX:
         return None
 
-    # Prefer the publisher id when present so golden-set ids stay stable across runs.
     item_id = str(row.get("id") or f"{id_prefix}:{split}:{index}")
     return ProductListing(
         item_id=item_id,
         title=title or summary[:120],
         description=summary,
         category=str(row.get("category") or "Other"),
-        list_price=clamp_usd_price(price),
-        # Labels are Amazon *list* prices, not marketplace sold comps — treat as new.
+        price=clamp_usd_price(price),
         condition="new",
     )
 
@@ -98,20 +75,7 @@ def prepare_dataset(
     train_limit: int | None = None,
     val_limit: int | None = None,
 ) -> dict[str, int]:
-    """Download from Hub and write the local parquet layout.
-
-    Returns a dict of row counts (useful for CLI / prep reports).
-
-    Parameters
-    ----------
-    size:
-        ``lite`` keeps the publisher's train/val/test splits.
-        ``full`` subsamples the large dataset but always uses lite test as golden.
-    dataset_id:
-        Optional Hub override; defaults to ``benifa/items_lite`` or ``items_full``.
-    train_limit / val_limit:
-        Caps for the full path (and optional train cap on lite).
-    """
+    """Download from Hub and write splits + golden. Returns row counts."""
     size = size.lower().strip()
     if size not in _DATASET_BY_SIZE:
         raise ValueError(f"size must be 'lite' or 'full', got {size!r}")
@@ -137,7 +101,6 @@ def _map_rows(
     limit: int | None = None,
     skip_titles: set[str] | None = None,
 ) -> list[ProductListing]:
-    """Convert many Hub rows, optionally stopping early or skipping titles."""
     blocked = skip_titles or set()
     out: list[ProductListing] = []
     for i, row in enumerate(rows):
@@ -156,7 +119,6 @@ def _map_rows(
 
 
 def _write_split(settings: Settings, name: str, products: list[ProductListing]) -> None:
-    """Write one split parquet under ``data/splits/{name}.parquet``."""
     save_products(settings.splits_dir / f"{name}.parquet", products)
 
 
@@ -166,12 +128,10 @@ def _build_lite(
     hub_id: str,
     train_limit: int | None,
 ) -> dict[str, int]:
-    """Materialize the small dataset: local splits mirror Hub; golden = test."""
     from datasets import load_dataset
 
     online = load_dataset(hub_id)
     counts: dict[str, int] = {}
-    all_products: list[ProductListing] = []
     golden: list[ProductListing] = []
 
     for hub_name, local_name in _HUB_SPLITS:
@@ -182,14 +142,10 @@ def _build_lite(
         products = _map_rows(rows, split=local_name, id_prefix="amazon_lite")
         _write_split(settings, local_name, products)
         counts[local_name] = len(products)
-        all_products.extend(products)
         if local_name == "test":
             golden = products
         logger.info("Wrote %s: %d products", local_name, len(products))
 
-    # Combined dump is handy for ad-hoc inspection; training uses splits/.
-    save_products(settings.combined_dir / "amazon.parquet", all_products)
-    # Golden is EvalItem-shaped so the eval leaderboard can load it directly.
     save_eval_items(
         settings.golden_dir / "amazon.parquet",
         products_to_eval_items(golden),
@@ -213,11 +169,7 @@ def _build_full(
     train_limit: int,
     val_limit: int,
 ) -> dict[str, int]:
-    """Materialize a large train/val subsample with lite-test as the golden holdout.
-
-    Fair-eval rule: any title that appears in the golden set must not appear in
-    train or val, otherwise MAE on golden can leak from memorization.
-    """
+    """Large train/val subsample; golden = lite test (titles excluded from train/val)."""
     from datasets import load_dataset
 
     large = load_dataset(hub_id)
@@ -239,7 +191,6 @@ def _build_full(
         limit=val_limit,
         skip_titles=holdout_titles,
     )
-    # A small peek of full-test is written for sanity checks; it is *not* the golden set.
     test_peek = _map_rows(
         large["test"],
         split="test",
@@ -250,7 +201,6 @@ def _build_full(
     _write_split(settings, "train", train)
     _write_split(settings, "val", val)
     _write_split(settings, "test", test_peek)
-    save_products(settings.combined_dir / "amazon.parquet", train + val + test_peek)
 
     golden = _map_rows(lite["test"], split="test", id_prefix="amazon_lite")
     save_eval_items(
@@ -273,10 +223,7 @@ def _build_full(
             "val_limit": val_limit,
             "holdout_titles": len(holdout_titles),
             "counts": counts,
-            "note": (
-                "Train/val from full subsample; golden = lite test. "
-                "Golden titles excluded from train/val."
-            ),
+            "note": "Train/val from full subsample; golden = lite test.",
         },
     )
     logger.info("Full build done: %s", counts)

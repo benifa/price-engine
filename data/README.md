@@ -2,9 +2,8 @@
 
 | Path | Contents |
 |------|----------|
-| `combined/` | `amazon.parquet` union of prepared splits |
-| `splits/` | `train.parquet`, `val.parquet`, `test.parquet` |
+| `splits/` | `train.parquet`, `val.parquet`, `test.parquet` (from `prepare-data`) |
 | `golden/` | `amazon.parquet` held-out eval set |
-| `hf_dataset/` | Optional local prompt/completion dataset from `build-sft-dataset` |
+| `hf_dataset/` | Optional prompt/completion DatasetDict from `build-local-sft` (Hub-prompts fallback) |
 
 Nothing under `data/` is committed except this README.

@@ -1,16 +1,7 @@
-"""Published Amazon baseline scored via Modal ``pricer-service``.
+"""Published baseline via Modal ``pricer-service`` (ed-donner/price-2025-11-28).
 
-Why Modal instead of loading the Hub adapter locally?
-    bitsandbytes 4-bit weights are awkward on macOS; the course already deploys
-    ``ed-donner/price-2025-11-28`` behind a Modal ``Pricer`` class. Calling that
-    service keeps our eval path identical to the published serve path
-    (``docs/COMPARISON.md``).
-
-Contract with the remote class
-------------------------------
-We send a *truncated product description only*. The remote wrapper adds the
-list-price question and ``Price is $`` prefix itself — do not send a full
-prompt here or the model will see the question twice.
+We call Modal instead of loading 4-bit weights on macOS. Send a *truncated
+description only* — the remote wrapper adds the question and ``Price is $``.
 """
 
 from __future__ import annotations
@@ -18,7 +9,7 @@ from __future__ import annotations
 import logging
 
 from priceengine.models import EvalItem
-from priceengine.training.prompts import truncate_text
+from priceengine.prompts import truncate_text
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +17,7 @@ BASELINE_NAME = "ed-donner/price-2025-11-28 (Modal)"
 
 
 class PublishedBaselinePricer:
-    """Published list-price adapter on Modal (``pricer-service`` / ``Pricer``)."""
+    """Remote published adapter — fair-eval reference model."""
 
     name = BASELINE_NAME
 
@@ -41,12 +32,12 @@ class PublishedBaselinePricer:
         import modal
         from transformers import AutoTokenizer
 
-        from priceengine.config import BASE_MODEL, SUMMARY_CUTOFF
+        from priceengine.config import BASE_MODEL, MAX_DESCRIPTION_TOKENS
 
         remote_cls = modal.Cls.from_name(modal_app, modal_class)
         self._remote = remote_cls()
         self._cutoff_tokens = (
-            SUMMARY_CUTOFF if cutoff_tokens is None else cutoff_tokens
+            MAX_DESCRIPTION_TOKENS if cutoff_tokens is None else cutoff_tokens
         )
         self._tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_name or BASE_MODEL

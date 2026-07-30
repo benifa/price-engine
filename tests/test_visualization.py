@@ -5,23 +5,21 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from priceengine.eval.visualization import write_eval_html
+from priceengine.eval.report_html import write_eval_html
 from priceengine.models import Prediction
 
 
 def _preds(*errors: float) -> list[Prediction]:
     out = []
     for i, err in enumerate(errors):
-        truth = 100.0
-        guess = truth + err if i % 2 == 0 else truth - err
-        # Keep |guess - truth| == err
-        guess = truth + err
+        actual = 100.0
+        estimate = actual + err
         out.append(
             Prediction(
                 item_id=f"amazon_lite:test:{i}",
-                guess=guess,
-                truth=truth,
-                error=abs(guess - truth),
+                estimate=estimate,
+                actual=actual,
+                error=abs(estimate - actual),
                 truncated=False,
                 category="Electronics",
                 condition=None,
@@ -66,6 +64,8 @@ def test_write_eval_html_versioned(tmp_path: Path, monkeypatch):
     )
     assert out.name == "eval_report-v0.1.0.html"
     html = out.read_text()
+    assert "Who wins on list price" in html
+    assert "Ranked comparison" in html
     assert "Worst 2 misses" in html
     assert "Overlay" in html or "overlay" in html.lower()
     assert (reports / "eval_report.html").exists()

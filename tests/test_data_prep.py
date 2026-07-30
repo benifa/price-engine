@@ -1,4 +1,4 @@
-from priceengine.data_prep import clamp_usd_price, hub_row_to_product
+from priceengine.data import clamp_usd_price, hub_row_to_product
 
 
 def test_hub_row_to_product():
@@ -14,7 +14,7 @@ def test_hub_row_to_product():
     }
     listing = hub_row_to_product(row, split="train", index=0)
     assert listing is not None
-    assert listing.list_price == 64.0  # rounded
+    assert listing.price == 64.0  # rounded
     assert listing.condition == "new"
     assert listing.item_id == "42"
 
@@ -31,3 +31,32 @@ def test_hub_row_rejects_out_of_range():
 def test_clamp_usd_price():
     assert clamp_usd_price(49.6) == 50
     assert clamp_usd_price(0.2) == 1
+
+
+def test_product_listing_compat_list_price_field():
+    from priceengine.models import ProductListing
+
+    listing = ProductListing.model_validate(
+        {
+            "item_id": "1",
+            "title": "t",
+            "description": "d",
+            "category": "Other",
+            "list_price": 10.0,
+        }
+    )
+    assert listing.price == 10.0
+
+
+def test_eval_item_compat_id_field():
+    from priceengine.models import EvalItem
+
+    item = EvalItem.model_validate(
+        {
+            "id": "abc",
+            "title": "t",
+            "description": "d",
+            "price": 12.0,
+        }
+    )
+    assert item.item_id == "abc"

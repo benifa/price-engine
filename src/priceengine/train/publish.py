@@ -14,7 +14,7 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from priceengine.config import AMAZON_LIST_QUESTION, BASE_MODEL, PRICE_PREFIX, Settings
+from priceengine.config import BASE_MODEL, PRICE_PREFIX, PRICE_QUESTION, Settings
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ QLoRA adapter for Amazon **list-price** estimation. Trained and evaluated by
 ## Prompt format
 
 ```text
-{AMAZON_LIST_QUESTION}
+{PRICE_QUESTION}
 
 <title + description>
 
@@ -117,10 +117,9 @@ model = PeftModel.from_pretrained(model, adapter, revision="{tag}")
 
 {_metrics_blurb(leaderboard_md)}
 
-## Ollama
+## Notes
 
-This Hub repo is a **PEFT adapter**, not a GGUF. See `docs/OLLAMA.md` to merge
-and convert for local Ollama use.
+This Hub repo is a **PEFT adapter** (base + LoRA), not a merged GGUF.
 """
 
 

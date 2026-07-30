@@ -1,16 +1,11 @@
-# Reports (generated locally — gitignored)
+# Reports (local only — gitignored)
 
-Artifacts from the research loop: **prepare → Modal/HF train → eval → publish**.
-Ollama export stages files under `artifacts/` (not here).
+| Artifact | Command |
+|----------|---------|
+| `amazon_prep.json` | `priceengine prepare-data` |
+| `sft_dataset.json` | `priceengine build-local-sft` (optional) |
+| `leaderboard*.md` / `.json` | `priceengine eval` |
+| `eval_report.html` / `eval_report-v*.html` | `eval --visualize` |
+| `publish-v*.json` | `priceengine publish-model` |
 
-| Artifact | Produced by |
-|----------|-------------|
-| `amazon_prep.json` | `priceengine prepare-list-prices` |
-| `sft_dataset.json` | `priceengine build-sft-dataset` |
-| `leaderboard*.md` / `.json` | `priceengine eval` / `eval-baselines` |
-| `eval_report.html` | `priceengine visualize-eval` / `eval --visualize` |
-| `eval_report-v*.html` | Versioned copy when `--version` / `--report-version` is set |
-| `publish-v*.json` | `priceengine publish-model` (Hub PEFT tag metadata) |
-| `token_length/` | `priceengine token-budget` |
-
-Regenerate from the CLI — nothing here is committed.
+Nothing under `reports/` is committed except this README.
